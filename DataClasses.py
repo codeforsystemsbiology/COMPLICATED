@@ -37,7 +37,7 @@ class Data:
 	if data_loc not in [None,1,2,3]:
 		try:
 			data_loc = {'addama':1,'Addama':1,'S3':2,'s3':2,
-                                    'Local':3, 'local':3}
+                                    'Local':3, 'local':3}[data_loc]
 		except:
 			data_loc = None
 
@@ -56,6 +56,12 @@ class Data:
 		self.data_uri = data_uri
 		self.data_uri = urllib.quote(self.data_uri)
 
+	if data_loc == 3:
+		self.local_cache = self.data_uri
+		self.data_uri = None
+	else:
+		self.local_cache = None
+
 	try:
 		self.data_uri = self.data_uri.split('https%3A//')[-1]
 		self.data_uri = self.data_uri.split('http%3A//')[-1]
@@ -71,19 +77,53 @@ class Data:
 	else:
 		# do local?
 		self.Comm = None
-		pass
 
-    def write(self, data_pref):
-	pass
+    def write(self, data_pref, uri, key = None):
+	if key == None:
+		key = self.ApiKey
+	if data_pref not in [1,2,3]:
+		try:
+			data_pref = {'addama':1,'Addama':1,'S3':2,'s3':2,
+                                    'Local':3, 'local':3}[data_pref]
+		except:
+			return False
 
-    def _writeToAddama(self, addama_dir):
+	if data_pref == 3 and self.data_uri is not None:
+		try:
+			_toFile(uri)
+			return True
+		except:
+			print('write Error - Could not write to file: ' + uri)
+			return False
+	
+	elif data_pref == 1 and self.local_cache is not None:
+		if key is None:
+			print('write Error: missing Addama apikey')
+			return False
+		try:
+			_toAddama(uri, key)
+			return True
+		except:
+			print('write Error - Could not write to uri: '+ uri)
+			return False
+	else:
+		return False
+
+    def _toAddama(self, addama_dir, key):
         """
         Take the current data obj, 
         """
-	pass
-        
+	if key is not self.ApiKey:
+		self.Comm = AddamaHandler(key)
+		self.ApiKey = key
+	self.Comm.writeFile(addama_dir, open(self.local_cache, "rb"))
+
+
     def _discoverLocation(self):
         """
+
+	*pop a couple of HEADs then check status*
+
         From the uri, returns where the data is stored as class variable
         Data.Addama
         Data.S3
@@ -95,13 +135,16 @@ class Data:
         """
         Retrieves data from data_uri and stores it in the local cache.
         """
-	if self.Comm is not None and local_cache == '':
-		return self.Comm.readFile(self.data_uri)
+	if self.Comm is None and self.local_cache is not None:
+		output = open(self.local_cache, 'rb')
 	elif self.Comm is None:
+		print('getData Error: No uri or local cache to pull from')
 		return None
 	else:
 		output = self.Comm.readFile(self.data_uri)
 
+	if local_cache == '':
+		return output
 	if local_cache == '.':
 		fname = self.data_uri.split('/')[-1]	
 	elif local_cache.count('.'):
@@ -111,24 +154,26 @@ class Data:
 	else:
 		fname = local_cache+'/'+self.data_uri.split('/')[-1]
 	
-	f = open(fname, 'w')
+	f = open(fname, 'wb')
 	f.write(output)
 	f.close()
+	self.local_cache = fname
 	return output
 
-    def _toFile(self):
+    def _toFile(self, local_cache):
         """
-        returns a file type object that can be stored.
-
-        i.e. don't worry about this.  Will be overrridden
+	Transfers web data to local cache
         """
-        pass
+	f = open(local_cache, 'wb')
+	f.write(self.Comm.readFile(self.data_uri))
+	f.close()
+	self.local_cache = local_cache
 
     def _fromFile(self,filepath, filename):
         """
         Given a local path and filename, returns useable data object
         """
-        pass
+        
 
 class CommHandler:
     """
@@ -167,7 +212,7 @@ class AddamaHandler(CommHandler):
     def readFile(self, uri):
 	if self.Host == None:
 		print "readFile Error: No Addama authorization present"
-		return []
+		return None
 	
 	try:
 		headers = {"x-addama-apikey": self.ApiKey }
@@ -182,7 +227,7 @@ class AddamaHandler(CommHandler):
 			conn.close()
 		except:
 			pass
-		return []
+		return None
 
 	resp = conn.getresponse()
 	if resp.status == 200:
@@ -194,11 +239,37 @@ class AddamaHandler(CommHandler):
 			retout = output
 	else:
 		print("Addama readFile Error:", resp.status, resp.reason)
-		retout = []
+		retout = None
 	
 	conn.close()
 	return retout
-		
+	
+
+    def writeFile(self, uri, data):
+	if isinstance(data, str):
+		try:
+			data = open(data, "rb")
+		except:
+			print("Error opening data file: " + data)
+			return False
+	try:
+		headers = {"x-addama-apikey": self.ApiKey,"Content-type": "application/x-www-form-urlencoded", "Accept": "text/plain" }
+		conn = httplib.HTTPSConnection(self.Host)
+		uri = uri.lstrip(self.Host)
+		conn.request("POST", uri, data, headers)
+	except:
+		print("Addama readFile Connection/Request Error:", 
+                      sys.exc_info()[0])
+		try:
+			conn.close()
+		except:
+			pass
+		return False
+	out = conn.getresponse()
+	out = out.read()
+	conn.close()
+	return out
+	
 
 class S3Handler(CommHandler):
         
