@@ -17,10 +17,19 @@ What the written file looks like.  Act like it is a long string of bytes.
 
 """
 
+import socket
 import sys
+import os
 import urllib
+import urllib2
+import urlparse
 import httplib
 import ConfigParser
+import mimetypes
+import mimetools
+import pycurl
+from cStringIO import StringIO
+
 try: import json #python 2.6 included simplejson as json
 except ImportError: import simplejson as json
 
@@ -34,49 +43,50 @@ class Data:
  
     #should be able to pass the data URI or the synid or both.
     def __init__(self, synid=None, data_uri=None, data_loc=None, key=None):
-        if data_loc not in [None,1,2,3]:
+        if data_loc not in [None, Data.Addama, Data.S3, Data.Local]:
             try:
                 data_loc = {'addama':1,'Addama':1,'S3':2,'s3':2,
                                         'Local':3, 'local':3}[data_loc]
             except:
                 data_loc = None
 
-        if synid == None and data_uri == None:
-            self.synid = synid
-            self.data_uri = data_uri
-        elif data_uri == None and synid.startswith("syn") and not synid.count("."):
-            self.synid = synid
-            self.data_uri = None
-        elif data_uri == None:
-            self.data_uri = synid
-            self.data_uri = urllib.quote(self.data_uri)
-            self.synid = None
-        else:
-            self.synid = synid
-            self.data_uri = data_uri
-            self.data_uri = urllib.quote(self.data_uri)
+        (self.synid, self.data_uri) = self._inputCheck(synid, data_uri)
 
-        if data_loc == 3:
-            self.local_cache = self.data_uri
-            self.data_uri = None
-        else:
-            self.local_cache = None
-
-        try:
+        if self.data_uri is not None:
             self.data_uri = self.data_uri.split('https%3A//')[-1]
             self.data_uri = self.data_uri.split('http%3A//')[-1]
-        except:
-            pass
 
+        (self.local_cache, self.data_uri) = self._localCacheSetup(data_loc, self.data_uri)
+
+        self.Comm = self._CommSetup(data_loc, key)
+
+    def _inputCheck(self, synid, uri):
+        if uri == None:
+            if synid == None:
+                return None, None
+            elif synid.startswith("syn") and not synid.count("."):
+                return synid, None
+            else:
+                return None, urllib.quote(synid)
+        else:
+            return synid, urllib.quote(uri)
+
+    def _localCacheSetup(self, data_loc, uri):
+        if data_loc == Data.Local:
+            return uri, None
+        else:
+            return None, uri
+
+    def _CommSetup(self, data_loc, key):
         if data_loc == None:
             data_loc = self._discoverLocation()
-        if data_loc == 1:
-            self.Comm = AddamaHandler(key)
-        elif data_loc == 2:
-            self.Comm = S3Handler(key)
-        else:
-            # do local?
-            self.Comm = None
+
+        if data_loc == Data.Addama:
+            return AddamaHandler(key)
+        elif data_loc == Data.S3:
+            return S3Handler(key)
+        else: # do local?
+            return None
 
     def write(self, data_pref, uri, key = None):
         if key == None and self.Comm is not None:
@@ -100,12 +110,11 @@ class Data:
             if key is None:
                 print('write Error: missing Addama apikey')
                 return False
-            try:
-                _toAddama(uri, key)
-                return True
-            except:
-                print('write Error - Could not write to uri: '+ uri)
-                return False
+            #try:
+            return self._toAddama(uri, key)
+            #except:
+            #    print('write Error - Could not write to uri: '+ uri)
+            #    return False
         else:
             return False
 
@@ -113,11 +122,10 @@ class Data:
         """
         Take the current data obj, 
         """
-        if key is not self.ApiKey:
+        if (self.Comm is None) or (key is not self.Comm.ApiKey):
             self.Comm = AddamaHandler(key)
             self.ApiKey = key
-        self.Comm.writeFile(addama_dir, open(self.local_cache, "rb"))
-
+        return self.Comm.writeFile(addama_dir, open(self.local_cache, "rb")) 
 
     def _discoverLocation(self):
         """
@@ -252,24 +260,145 @@ class AddamaHandler(CommHandler):
             except:
                 print("Error opening data file: " + data)
                 return False
-        try:
-            headers = {"x-addama-apikey": self.ApiKey,"Content-type": "application/x-www-form-urlencoded", "Accept": "text/plain" }
-            conn = httplib.HTTPSConnection(self.Host)
-            uri = uri.lstrip(self.Host)
-            conn.request("POST", uri, data, headers)
-        except:
-            print("Addama readFile Connection/Request Error:", 
-                          sys.exc_info()[0])
-            try:
-                conn.close()
-            except:
-                pass
-            return False
+        #try:
+        ghead = {"x-addama-apikey": self.ApiKey}
+        gcon = httplib.HTTPSConnection(self.Host)
+        gparams = urllib.urlencode({})
+        uri = uri.lstrip(self.Host)
+        gcon.request("GET", uri, gparams, ghead)
+        gout = gcon.getresponse().read()
+        guri = gout.split('"')[1]
+        filename = 'example.txt'
+        filesize = os.path.getsize(filename)
+        values = [
+            ("field1", "this is test and stuff"),
+            ("field2", (pycurl.FORM_FILE, filename)),
+            ('field3', (pycurl.FORM_CONTENTS, 'this is wei\000rd, but fun.'))
+        ]
+        print guri
+        eguri = guri.split('https://')[-1]
+        print guri
+        #guri = guri.lstrip(self.Host)
+        print repr(guri)
+        headers = {"Content-type": get_content_type(filename), "Content-Length": filesize, "Accept": "text/plain"}
+        #conn = httplib.HTTPConnection(('price-external.systemsbiology.net/'))
+        #conn.request("POST", guri.split('price-external.systemsbiology.net/')[-1], data, ghead)
+        gurips = eguri.split('.net',1)
+        gurips[0] = gurips[0] + '.net'
+        print gurips
+        conn = httplib.HTTPSConnection(gurips[0])
+        #conn = httplib.HTTPSConnection(guri)
+        #pparams = urllib.urlencode({})
+        #conn.request("GET", gurips[1], pparams, ghead)
+        #pparams = urllib.urlencode({'name':'example.txt', 'file':data})
+        from multipart import Multipart
+        m = Multipart()
+        m.file('hello','hello.txt', 'Ijustwantthis to work', {'Content-Type':'text/text'})
+        ct, tbody = m.get()
+        print ct
+        print tbody
+        request = urllib2.Request(url = guri, headers={'Content-Type':ct}, data=tbody)
+        print urllib2.urlopen(request).read()
+        conn.request("GET", gurips[1], data.read(), ghead)
+        """
+        c = pycurl.Curl()
+        c.setopt(c.POST, 1)
+        #c.setopt(c.HTTPPOST, [('title', filename), (('file', (c.FORM_FILE, filename)))])
+        #c.setopt(c.READFUNCTION, FileReader(open(filename, 'rb')).read_callback)
+        bodyOutput = StringIO()
+        headersOutput = StringIO()
+        c.setopt(c.WRITEFUNCTION, bodyOutput.write)
+        #c.setopt(c.HTTPHEADER, ["Content-type: text/plain"])
+        print guri
+        c.setopt(c.VERBOSE, 1)
+        #c.setopt(c.UPLOAD, 1)
+        c.setopt(c.URL, guri)
+        c.setopt(c.HTTPPOST, values)
+        c.setopt(c.INFILESIZE, filesize)
+        c.perform()
+        print bodyOutput.getvalue()
+        
+        f1 = 'example', 'example.txt', data
+        netu = f1,
+
+        print post_multipart(guri, gurips[1], None, netu )
+        print data.read()
+        """
+        #except:
+        #    print("Addama readFile Connection/Request Error:", 
+        #                  sys.exc_info()[0])
+        #    try:
+        #        conn.close()
+        #    except:
+        #        pass
+        #    return False
         out = conn.getresponse()
+        #print out.status
         out = out.read()
-        conn.close()
-        return out
+        print out
+        gcon.close()
+        #conn.close()
+        return None #out
 	
+class FileReader:
+    def __init__(self,fp):
+        self.fp = fp
+    def read_callback(self, size):
+        return self.fp.read(size)
+
+## {{{ http://code.activestate.com/recipes/146306/ (r1)
+import httplib, mimetypes
+
+def post_multipart(host, selector, fields, files):
+    """
+    Post fields and files to an http host as multipart/form-data.
+    fields is a sequence of (name, value) elements for regular form fields.
+    files is a sequence of (name, filename, value) elements for data to be uploaded as files
+    Return the server's response page.
+    """
+    content_type, body = encode_multipart_formdata(fields, files)
+    h = httplib.HTTP(host)
+    h.putrequest('POST', selector)
+    h.putheader('content-type', content_type)
+    h.putheader('content-length', str(len(body)))
+    h.endheaders()
+    h.send(body)
+    errcode, errmsg, headers = h.getreply()
+    print errcode, errmsg, headers
+    return h.file.read()
+
+def encode_multipart_formdata(fields, files):
+    """
+    fields is a sequence of (name, value) elements for regular form fields.
+    files is a sequence of (name, filename, value) elements for data to be uploaded as files
+    Return (content_type, body) ready for httplib.HTTP instance
+    """
+    BOUNDARY = '----------ThIs_Is_tHe_bouNdaRY_$'
+    CRLF = '\r\n'
+    L = []
+    """    for (key, value) in fields:
+        L.append('--' + BOUNDARY)
+        L.append('Content-Disposition: form-data; name="%s"' % key)
+        L.append('')
+        L.append(value)
+    """
+    print files
+    for (key, filename, value) in files:
+        L.append('--' + BOUNDARY)
+        L.append('Content-Disposition: form-data; name="%s"; filename="%s"' % (key, filename))
+        L.append('Content-Type: %s' % get_content_type(filename))
+        L.append('')
+        L.append(value.read())
+    L.append('--' + BOUNDARY + '--')
+    L.append('')
+    body = CRLF.join(L)
+    content_type = 'multipart/form-data; boundary=%s' % BOUNDARY
+    return content_type, body
+
+def get_content_type(filename):
+    return mimetypes.guess_type(filename)[0] or 'application/octet-stream'
+## end of http://code.activestate.com/recipes/146306/ }}}
+
 
 class S3Handler(CommHandler):
         

@@ -79,6 +79,6 @@ except:
     print('correct - getData pulling from local_cache by default')
 line = line + 12
 
-Ldata = DataClasses.Data('uploadPLZ.txt', data_loc='local')
-print Ldata.getData().read()
-print Ldata.write('Addama', 'https://price-external.appspot.com/addama/workspaces/fileshare/', 'price-external.apikey')
+Ldata = DataClasses.Data('example.txt', data_loc='local')
+
+print Ldata.write('Addama', 'https://price-external.appspot.com/addama/workspaces/fileshare/example.txt/directlink', 'price-external.apikey')
